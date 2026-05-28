@@ -1,24 +1,13 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/generate.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/generate.py": {
+      "runtime": "vercel-python@3.0.0",
+      "maxDuration": 60
     }
-  ],
-  "routes": [
-    {
-      "src": "/api/generate",
-      "dest": "api/generate.py"
-    }
-  ],
+  },
   "env": {
     "CLOUDINARY_CLOUD": "dx4wlvbxt",
     "CLOUDINARY_UPLOAD_PRESET": "alpuerta_test"
-  },
-  "functions": {
-    "api/generate.py": {
-      "maxDuration": 60
-    }
   }
 }
