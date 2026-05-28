@@ -34,18 +34,6 @@ def get_asset(tipo, asset_id=None):
 
 def editar_foto(img):
     """Edición fotográfica: limpiar fondo, mejorar contraste y nitidez."""
-    # Rotar si es necesario por EXIF
-    try:
-        from PIL import ExifTags
-        exif = img._getexif()
-        if exif:
-            for tag, val in exif.items():
-                if ExifTags.TAGS.get(tag) == "Orientation":
-                    if val == 6: img = img.rotate(-90, expand=True)
-                    elif val == 8: img = img.rotate(90, expand=True)
-                    elif val == 3: img = img.rotate(180, expand=True)
-    except:
-        pass
 
     # Crop cuadrado centrado
     w, h = img.size
