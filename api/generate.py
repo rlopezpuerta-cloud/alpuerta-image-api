@@ -205,4 +205,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", len(body))
         self.end_headers()
         self.wfile.write(body)
-fix: imagen completa sin cortar trofeos altos
+
