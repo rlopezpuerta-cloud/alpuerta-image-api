@@ -37,39 +37,36 @@ def get_asset(tipo, asset_id=None):
 def editar_foto(img):
     """
     Edición fotográfica profesional.
-    - Smart crop: detecta dónde está el producto y centra el encuadre en él.
-    - NO rota — las fotos ya están orientadas correctamente.
+    - Detecta el producto y recorta SOLO su bounding box real con 8% de padding.
+    - Encaja la imagen completa (fit) en 1080x1080 sin cortar, con relleno
+      blanco si las proporciones no son cuadradas. Esto evita que trofeos
+      altos y delgados queden cortados arriba o abajo.
     - Limpia fondo gris/blanco a blanco puro.
     - Mejora contraste, nitidez, saturación y brillo.
     """
     w, h = img.size
     arr = np.array(img)
     gray = np.mean(arr, axis=2)
- 
+
     # Detectar producto (píxeles oscuros = no fondo)
     product_mask = gray < 200
     rows = np.any(product_mask, axis=1)
     cols = np.any(product_mask, axis=0)
- 
+
     if rows.any() and cols.any():
         rmin, rmax = np.where(rows)[0][[0, -1]]
         cmin, cmax = np.where(cols)[0][[0, -1]]
-        # Centro del producto
-        cy = (rmin + rmax) // 2
-        cx = (cmin + cmax) // 2
-        # Crop cuadrado centrado en el producto
-        side = min(w, h)
-        left = max(0, cx - side // 2)
-        top  = max(0, cy - side // 2)
-        left = min(left, w - side)
-        top  = min(top,  h - side)
-        img = img.crop((left, top, left + side, top + side))
-    else:
-        # Fallback: crop centrado
-        side = min(w, h)
-        img = img.crop(((w - side) // 2, (h - side) // 2,
-                        (w + side) // 2, (h + side) // 2))
- 
+        # Padding del 8% alrededor del producto
+        pad_v = int((rmax - rmin) * 0.08)
+        pad_h = int((cmax - cmin) * 0.08)
+        rmin = max(0, rmin - pad_v)
+        rmax = min(h, rmax + pad_v)
+        cmin = max(0, cmin - pad_h)
+        cmax = min(w, cmax + pad_h)
+        # Crop al bounding box del producto (NO forzar cuadrado)
+        img = img.crop((cmin, rmin, cmax, rmax))
+    # Si no se detecta producto, usar la imagen completa
+
     # Limpiar fondo gris/blanco → blanco puro
     arr = np.array(img).astype(float)
     r, g, b = arr[:,:,0], arr[:,:,1], arr[:,:,2]
@@ -90,8 +87,17 @@ def editar_foto(img):
     img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=80, threshold=2))
     img = ImageEnhance.Color(img).enhance(1.25)
     img = ImageEnhance.Brightness(img).enhance(1.08)
- 
-    return img.resize((1080, 1080), Image.LANCZOS)
+
+    # FIT en canvas 1080x1080: escala manteniendo proporción, centra con padding blanco
+    w2, h2 = img.size
+    scale = min(1080 / w2, 1080 / h2)
+    new_w = int(w2 * scale)
+    new_h = int(h2 * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    canvas = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    canvas.paste(img, ((1080 - new_w) // 2, (1080 - new_h) // 2))
+    return canvas
  
  
 def aplicar_template(photo, copy_text, cta_text):
@@ -199,4 +205,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", len(body))
         self.end_headers()
         self.wfile.write(body)
- 
+fix: imagen completa sin cortar trofeos altos
