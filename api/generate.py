@@ -1,11 +1,10 @@
 """
-Alpuerta Premiaciones — Image Generator API (estilo Studio Catalog).
-Usa fotos pre-procesadas sin fondo (alpuerta_assets_clean/) y aplica:
-- Fondo oscuro warm con halo dorado central + spotlight cenital
-- Producto con mejoras premium (brillo, contraste, saturacion, nitidez)
-- Sombra realista
-- Sin particulas
-- Franja inferior con copy/cta/logo de marca (emojis stripeados)
+Alpuerta Premiaciones — Image Generator API
+Sistema de fondos dinamicos con sombra elipsoidal limpia.
+- Analiza tono del producto (warm/cool/neutral)
+- Elige fondo que contrasta (dark_cool, dark_warm, light_cream, neutral_gray)
+- Usa fotos pre-procesadas sin fondo de alpuerta_assets_clean/
+- Sombra elipsoidal (no calcada del alpha)
 """
 from http.server import BaseHTTPRequestHandler
 import json, base64, urllib.request, io, random, os, time, re
@@ -53,8 +52,118 @@ def get_asset(tipo, asset_id=None):
     return random.choice(pool)
 
 
-def mejoras_producto_premium(img_rgba):
-    """Mejoras catalog premium preservando canal alpha."""
+def analizar_producto(img_rgba):
+    """Analiza el producto y retorna tono y luminosidad."""
+    arr = np.array(img_rgba)
+    alpha = arr[:, :, 3]
+    mask = alpha > 200
+    if not mask.any():
+        return {"tono": "neutral", "luminosidad": "medium"}
+    pixels = arr[mask][:, :3].astype(float)
+    lum = pixels.mean()
+    rb_diff = pixels[:, 0].mean() - pixels[:, 2].mean()
+    if rb_diff > 22:
+        tono = "warm"
+    elif rb_diff < -15:
+        tono = "cool"
+    else:
+        tono = "neutral"
+    if lum > 170:
+        luminosidad = "light"
+    elif lum > 100:
+        luminosidad = "medium"
+    else:
+        luminosidad = "dark"
+    return {"tono": tono, "luminosidad": luminosidad}
+
+
+def elegir_estilo(a):
+    """Selecciona el fondo que mas contrasta con el producto."""
+    if a["tono"] == "warm":
+        return "dark_cool"
+    if a["tono"] == "cool":
+        return "light_cream" if a["luminosidad"] != "dark" else "dark_warm"
+    return "neutral_gray"
+
+
+def fondo_dark_cool(size, cx, cy):
+    """Fondo oscuro azul-grafito con halo blanco-cyan. Contrasta dorados."""
+    pixels = np.zeros((size, size, 3), dtype=np.uint8)
+    yy, xx = np.indices((size, size))
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    factor = np.clip(1 - dist / (size * 0.70), 0, 1) ** 1.8
+    center = np.array([60, 70, 85]); edge = np.array([8, 10, 18])
+    for c in range(3):
+        pixels[:, :, c] = (center[c] * factor + edge[c] * (1 - factor)).astype(np.uint8)
+    canvas = Image.fromarray(pixels).convert("RGBA")
+    halo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    for r, a in [(480, 18), (380, 35), (280, 60), (180, 100), (100, 140)]:
+        hd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(220, 230, 255, a))
+    return Image.alpha_composite(canvas, halo.filter(ImageFilter.GaussianBlur(radius=55)))
+
+
+def fondo_dark_warm(size, cx, cy):
+    """Fondo oscuro warm con halo dorado. Para productos cool oscuros."""
+    pixels = np.zeros((size, size, 3), dtype=np.uint8)
+    yy, xx = np.indices((size, size))
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    factor = np.clip(1 - dist / (size * 0.70), 0, 1) ** 1.8
+    center = np.array([72, 58, 42]); edge = np.array([10, 9, 12])
+    for c in range(3):
+        pixels[:, :, c] = (center[c] * factor + edge[c] * (1 - factor)).astype(np.uint8)
+    canvas = Image.fromarray(pixels).convert("RGBA")
+    halo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    for r, a in [(480, 20), (380, 40), (280, 70), (180, 120), (100, 160)]:
+        hd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(244, 196, 48, a))
+    return Image.alpha_composite(canvas, halo.filter(ImageFilter.GaussianBlur(radius=55)))
+
+
+def fondo_light_cream(size, cx, cy):
+    """Fondo crema claro con halo dorado. Para productos cool claros."""
+    pixels = np.zeros((size, size, 3), dtype=np.uint8)
+    yy, xx = np.indices((size, size))
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    factor = np.clip(1 - dist / (size * 0.65), 0, 1) ** 1.5
+    center = np.array([252, 247, 235]); edge = np.array([218, 210, 195])
+    for c in range(3):
+        pixels[:, :, c] = (center[c] * factor + edge[c] * (1 - factor)).astype(np.uint8)
+    canvas = Image.fromarray(pixels).convert("RGBA")
+    halo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    for r, a in [(420, 30), (320, 55), (220, 80), (130, 110)]:
+        hd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(244, 196, 48, a))
+    return Image.alpha_composite(canvas, halo.filter(ImageFilter.GaussianBlur(radius=50)))
+
+
+def fondo_neutral_gray(size, cx, cy):
+    """Fondo gris neutral. Para productos multicolores o ambiguos."""
+    pixels = np.zeros((size, size, 3), dtype=np.uint8)
+    yy, xx = np.indices((size, size))
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    factor = np.clip(1 - dist / (size * 0.70), 0, 1) ** 1.6
+    center = np.array([210, 210, 215]); edge = np.array([75, 75, 85])
+    for c in range(3):
+        pixels[:, :, c] = (center[c] * factor + edge[c] * (1 - factor)).astype(np.uint8)
+    canvas = Image.fromarray(pixels).convert("RGBA")
+    halo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    for r, a in [(420, 25), (320, 45), (220, 70), (130, 100)]:
+        hd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(255, 255, 255, a))
+    return Image.alpha_composite(canvas, halo.filter(ImageFilter.GaussianBlur(radius=55)))
+
+
+def aplicar_spotlight(canvas, cx, cy, size, dark=True):
+    spot = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    spd = ImageDraw.Draw(spot)
+    color = (255, 240, 200, 50) if dark else (255, 255, 255, 70)
+    spd.ellipse([cx - 350, cy - 280, cx + 350, cy + 280], fill=color)
+    return Image.alpha_composite(canvas, spot.filter(ImageFilter.GaussianBlur(radius=70)))
+
+
+def mejoras_producto(img_rgba):
+    """Mejoras catalog premium preservando alpha."""
     alpha = img_rgba.split()[3]
     rgb = Image.new("RGB", img_rgba.size, (0, 0, 0))
     rgb.paste(img_rgba, mask=alpha)
@@ -67,90 +176,75 @@ def mejoras_producto_premium(img_rgba):
     return result
 
 
-def crear_sombra(producto, blur=32, alpha=180):
-    sa = np.array(producto)[:, :, 3]
-    sh = np.zeros((*sa.shape, 4), dtype=np.uint8)
-    sh[:, :, 3] = (sa > 50) * alpha
-    return Image.fromarray(sh).filter(ImageFilter.GaussianBlur(radius=blur))
+def sombra_elipsoidal(canvas_size, producto_size, producto_pos, dark=True):
+    """Sombra elipsoidal limpia debajo del producto (no calcada del alpha)."""
+    pw, ph = producto_size
+    px, py = producto_pos
+    sx = px + pw // 2
+    sy = py + int(ph * 0.92)
+    ew = int(pw * 0.85)
+    eh = int(pw * 0.18)
+    sombra = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(sombra)
+    alpha = 220 if dark else 130
+    for scale, a in [(1.3, alpha // 4), (1.0, alpha // 2), (0.7, alpha)]:
+        rw, rh = int(ew * scale), int(eh * scale)
+        sd.ellipse([sx - rw, sy - rh, sx + rw, sy + rh], fill=(0, 0, 0, a))
+    return sombra.filter(ImageFilter.GaussianBlur(radius=35))
 
 
-def estilo_studio_catalog(producto_rgba, size=1080):
-    """Compone producto sobre fondo studio dark."""
-    producto = mejoras_producto_premium(producto_rgba)
+def componer_studio(producto_rgba, size=1080):
+    """Compone producto con fondo dinamico segun analisis."""
+    analisis = analizar_producto(producto_rgba)
+    estilo = elegir_estilo(analisis)
 
-    # Fondo oscuro warm con gradiente radial
-    pixels = np.zeros((size, size, 3), dtype=np.uint8)
+    producto = mejoras_producto(producto_rgba)
     cy, cx = size // 2 - 60, size // 2
-    yy, xx = np.indices((size, size))
-    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
-    factor = np.clip(1 - dist / (size * 0.70), 0, 1) ** 1.8
-    center = np.array([72, 58, 42])
-    edge   = np.array([10, 9, 12])
-    for c in range(3):
-        pixels[:, :, c] = (center[c] * factor + edge[c] * (1 - factor)).astype(np.uint8)
-    canvas = Image.fromarray(pixels).convert("RGBA")
+    fondos = {
+        "dark_cool": (fondo_dark_cool, True),
+        "dark_warm": (fondo_dark_warm, True),
+        "light_cream": (fondo_light_cream, False),
+        "neutral_gray": (fondo_neutral_gray, False),
+    }
+    fondo_fn, is_dark = fondos[estilo]
+    canvas = fondo_fn(size, cx, cy)
+    canvas = aplicar_spotlight(canvas, cx, cy, size, dark=is_dark)
 
-    # Halo dorado central
-    halo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(halo)
-    hcy, hcx = size // 2, size // 2
-    for r, alpha in [(480, 20), (380, 40), (280, 70), (180, 120), (100, 160)]:
-        hd.ellipse([hcx - r, hcy - r, hcx + r, hcy + r], fill=(244, 196, 48, alpha))
-    halo = halo.filter(ImageFilter.GaussianBlur(radius=55))
-    canvas = Image.alpha_composite(canvas, halo)
-
-    # Spotlight cenital sutil
-    spot = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    spd = ImageDraw.Draw(spot)
-    spd.ellipse([cx - 350, cy - 280, cx + 350, cy + 280], fill=(255, 240, 200, 50))
-    spot = spot.filter(ImageFilter.GaussianBlur(radius=70))
-    canvas = Image.alpha_composite(canvas, spot)
-
-    # Producto centrado + sombra
     pw, ph = producto.size
-    target = int(size * 0.78)
+    target = int(size * 0.88)
     scale = min(target / pw, target / ph)
     producto_r = producto.resize((int(pw * scale), int(ph * scale)), Image.LANCZOS)
-    sombra = crear_sombra(producto_r, blur=32, alpha=180)
     px = (size - producto_r.width) // 2
     py = (size - producto_r.height) // 2
 
-    canvas.paste(sombra, (px + 20, py + 40), sombra)
+    sombra = sombra_elipsoidal((size, size), producto_r.size, (px, py), dark=is_dark)
+    canvas = Image.alpha_composite(canvas, sombra)
     canvas.paste(producto_r, (px, py), producto_r)
-    return canvas.convert("RGB")
+    return canvas.convert("RGB"), estilo
 
 
 def aplicar_template(photo, copy_text, cta_text):
-    """Composicion final 1080x1350 con franja inferior de marca."""
     copy_text = strip_emojis(copy_text)
     cta_text  = strip_emojis(cta_text)
-
     canvas = Image.new("RGB", (1080, 1350), (255, 255, 255))
     canvas.paste(photo, (0, 0))
     draw = ImageDraw.Draw(canvas)
     draw.rectangle([0, 1080, 1080, 1083], fill=(244, 196, 48))
-
     font_copy = ImageFont.truetype(OUTFIT_FONT, 27)
     font_cta  = ImageFont.truetype(OUTFIT_FONT, 23)
-
     logo = Image.open(LOGO_FILE).convert("RGBA")
     la = np.array(logo)
     la[(la[:,:,0] > 240) & (la[:,:,1] > 240) & (la[:,:,2] > 240), 3] = 0
     logo = Image.fromarray(la).resize((105, 105), Image.LANCZOS)
-
-    FRANJA_TOP = 1083
-    FRANJA_H   = 267
-    LOGO_X     = 1080 - 105 - 35
-    LOGO_Y     = FRANJA_TOP + (FRANJA_H // 2) - 52
-
+    FT, FH = 1083, 267
     lines = textwrap.wrap(copy_text, width=48)
-    total_h = len(lines) * 36 + 14 + 30
-    y = FRANJA_TOP + (FRANJA_H - total_h) // 2
+    total = len(lines) * 36 + 14 + 30
+    y = FT + (FH - total) // 2
     for line in lines:
         draw.text((50, y), line, fill=(26, 26, 26), font=font_copy)
         y += 36
     draw.text((50, y + 14), cta_text, fill=(196, 154, 26), font=font_cta)
-    canvas.paste(logo, (LOGO_X, LOGO_Y), logo)
+    canvas.paste(logo, (1080 - 105 - 35, FT + (FH // 2) - 52), logo)
     return canvas
 
 
@@ -182,21 +276,17 @@ class handler(BaseHTTPRequestHandler):
             copy_txt = body.get("copy", "")
             cta_txt  = body.get("cta", "")
             asset_id = body.get("asset_id", None)
-
             asset = get_asset(tipo, asset_id)
 
-            # Cargar PNG pre-procesado con alpha (sin fondo)
             url = (f"https://res.cloudinary.com/{CLOUDINARY_CLOUD}"
                    f"/image/upload/alpuerta_assets_clean/{asset}.png")
             with urllib.request.urlopen(url, timeout=30) as r:
                 producto_rgba = Image.open(io.BytesIO(r.read())).convert("RGBA")
 
-            foto_studio = estilo_studio_catalog(producto_rgba)
+            foto_studio, estilo = componer_studio(producto_rgba)
             post = aplicar_template(foto_studio, copy_txt, cta_txt)
             img_url = subir_a_cloudinary(post)
-
-            self._respond(200, {"image_url": img_url, "asset_used": asset})
-
+            self._respond(200, {"image_url": img_url, "asset_used": asset, "estilo": estilo})
         except Exception as e:
             self._respond(500, {"error": str(e)})
 
